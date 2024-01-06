@@ -231,7 +231,7 @@ defmodule PhoenixEvents do
         {events, processes, options}
       ) do
     if events |> Map.has_key?(meta.socket.root_pid) do
-      {:reply, :ok, {events, processes}}
+      {:reply, :ok, {events, processes, options}}
     else
       the_request = get_the_request(meta)
 
@@ -266,6 +266,7 @@ defmodule PhoenixEvents do
     {:reply, :ok, {events, processes, options}}
   end
 
+  @impl true
   def handle_call({:pid_to_event, socket_pid}, _from, {events, processes, options}) do
     {:reply, events |> Map.get(socket_pid), {events, processes, options}}
   end
@@ -335,12 +336,15 @@ defmodule PhoenixEvents do
     if ret != nil do
       ret
     else
-      {:parent, parent_pid} = src_pid |> Process.info(:parent)
+      case src_pid |> Process.info(:parent) do
+        nil ->
+          nil
 
-      if parent_pid == src_pid do
-        nil
-      else
-        pid_to_event(self_pid, parent_pid)
+        {:parent, ^src_pid} ->
+          nil
+
+        {:parent, parent_pid} ->
+          pid_to_event(self_pid, parent_pid)
       end
     end
   end
