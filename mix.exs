@@ -7,7 +7,11 @@ defmodule PhoenixEvents.MixProject do
       version: "0.1.0",
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
-      deps: deps()
+      deps: deps(),
+      description: description(),
+      name: "Phoenix events",
+      source_url: "https://github.com/ramuuns/phoenix_events",
+      package: package()
     ]
   end
 
@@ -25,6 +29,22 @@ defmodule PhoenixEvents.MixProject do
       {:phoenix, ">= 0.0.0"},
       {:jason, ">= 0.0.0"},
       {:telemetry, ">= 0.0.0"}
+    ]
+  end
+
+  defp description() do
+    """
+    A library that allows capturing http requests, websocket "actions" and other custom "events" (think cron-like stuff),
+    into a structured data and (optionally) sends them to an [eventcollector](https://github.com/ramuuns/eventcollector) instance
+    """
+  end
+
+  defp package() do
+    [
+      files: ~w(lib priv .formatter.exs mix.exs README* readme* LICENSE*
+        license* CHANGELOG* changelog* src),
+      licenses: ["MIT"],
+      links: %{GitHub: "https://github.com/ramuuns/phoenix_events"}
     ]
   end
 end
