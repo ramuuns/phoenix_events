@@ -238,7 +238,7 @@ defmodule PhoenixEvents do
       {:ok, pid} =
         Event.start_link(%{
           persona: options.persona,
-          he_request: the_request
+          the_request: the_request
         })
 
       action = "#{inspect(meta.socket.view)}"
