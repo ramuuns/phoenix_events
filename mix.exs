@@ -41,8 +41,6 @@ defmodule PhoenixEvents.MixProject do
 
   defp package() do
     [
-      files: ~w(lib priv .formatter.exs mix.exs README* readme* LICENSE*
-        license* CHANGELOG* changelog* src),
       licenses: ["MIT"],
       links: %{GitHub: "https://github.com/ramuuns/phoenix_events"}
     ]
