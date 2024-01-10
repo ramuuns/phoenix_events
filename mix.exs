@@ -4,7 +4,7 @@ defmodule PhoenixEvents.MixProject do
   def project do
     [
       app: :phoenix_events,
-      version: "0.1.3",
+      version: "0.2.0",
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
@@ -35,7 +35,7 @@ defmodule PhoenixEvents.MixProject do
 
   defp description() do
     """
-    A library that allows capturing http requests, websocket "actions" and other custom "events" (think cron-like stuff),
+    A library that allows capturing http requests, websocket "actions", oban job executions and other custom "events" (think cron-like stuff),
     into a structured data and (optionally) sends them to an [eventcollector](https://github.com/ramuuns/eventcollector) instance
     """
   end

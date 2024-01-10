@@ -80,6 +80,15 @@ defmodule PhoenixEvents.Event do
     GenServer.start_link(__MODULE__, data, [])
   end
 
+  def setup(pid, setup_func, params) do
+    GenServer.cast(pid, {:setup, setup_func, params})
+  end
+
+  @impl true
+  def handle_cast({:setup, setup_func, setup_func_params}, %{event: event} = data) do
+    {:noreply, %{data | event: apply(setup_func, [event] ++ setup_func_params)}}
+  end
+
   @impl true
   def handle_cast({:set_action, action}, %{event: ev} = event) do
     {:noreply, %{event | event: ev |> Map.put(:action, action)}}

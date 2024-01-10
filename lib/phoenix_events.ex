@@ -1,23 +1,53 @@
 defmodule PhoenixEvents do
+  @moduledoc """
+  A GenServer that attaches to various :telemetry events and turns them into "event"
+  spans. Ensures that events are always finalized and (optionally) sent.
+
+  Configuration options:
+
+  | `:persona` | `String` | *required* | The event reporting persona should probably be the name of your application |
+  | `:log_http` | `boolean` | optional | Defaults to true. Should we track http requests |
+  | `:http_prefix` | `list` | optional | Defaults to `[:phoenix, :endpoint]`. The telemetry prefix used by phoenix endpoint for http requests |
+  | `:log_live_view` | `boolean` | optional | Defaults to false. Should we track Phoenix.LiveView websocket requests |
+  | `:live_view_prefix` | `list` | optional | Defaults to `[:phoenix, :live_view]`. The telemetry prefix used by phoenix_live_view |
+  | `log_queries` | `boolean` | optional | Defaults to false. Should SQL queries (made via Ecto) be added to events. Requires setting the `:queries_prefix` option |
+  | `:queries_prefix` | `list` | optional | The telemetry prefix for Ecto - Should probably be something in the vein of `[:myapp, :repo]` |
+  | `:log_oban | `boolean` | optional | Should we treat Oban Job invocations as events |
+  | `:log_events` | `boolean` | optional | Defaults to true. Should we send the event to Logger.info as it is being send |
+  | `:send_events` | `boolean` | optional | Defaults to false. Should we send events to an Eventcollector instance |
+  | `:eventcollector_host` | `String` | optional | The hostname/ip of the eventcollector instance |
+  | `:eventcollector_port` | `String` | optional | The port of the eventcollector instance |
+  | `:static_paths` | list(String) | optional | Defaults to `["assets", "image"]`. Which http path prefixes should be treated as the static action |
+  | `:setup_func` | function(event, {kind, meta}) | optional | A callback function that will be invoked at the start of the event, that allows you to add any additional data to the event data structure. The default funciton is a noop |
+
+
+  """
+
   use GenServer
 
   alias PhoenixEvents.Event
 
   @instance_name :phoenix_events_instance
 
+  defp default_setup(ev, _), do: ev
+
   @defaults %{
-    log_queries: false,
-    log_live_view: false,
-    live_view_prefix: [:phoenix, :live_view],
     log_http: true,
     http_prefix: [:phoenix, :endpoint],
+    log_live_view: false,
+    live_view_prefix: [:phoenix, :live_view],
+    log_queries: false,
+    log_oban: false,
+    log_events: true,
     send_events: false,
-    log_events: true
+    static_paths: ["assets", "image"]
   }
 
   @impl true
   def init(options) when is_map(options) do
-    options = Map.merge(@defaults, options)
+    # can't have functions in a compile-time constant I guess, so I have to do this, which is a tad annoying
+    def_options = Map.put(@defaults, :setup_func, &default_setup/2)
+    options = Map.merge(def_options, options)
 
     validate_options(options)
 
@@ -60,14 +90,14 @@ defmodule PhoenixEvents do
 
     if options.log_http do
       :telemetry.attach(
-        "http-event-start",
+        "phoenix_events-http-event-start",
         options.http_prefix ++ [:start],
         &PhoenixEvents.http_event/4,
         {self()}
       )
 
       :telemetry.attach(
-        "http-event-end",
+        "phoenix_events-http-event-end",
         options.http_prefix ++ [:stop],
         &PhoenixEvents.http_event/4,
         {self()}
@@ -84,9 +114,32 @@ defmodule PhoenixEvents do
       end
 
       :telemetry.attach(
-        "queries",
+        "phoenix_events_queries",
         options.queries_prefix ++ [:query],
         &PhoenixEvents.handle_query/4,
+        {self()}
+      )
+    end
+
+    if options.log_oban do
+      :telemetry.attach(
+        "phoenix_events_oban_start",
+        [:oban, :job, :start],
+        &PhoenixEvents.oban_start/4,
+        {self()}
+      )
+
+      :telemetry.attach(
+        "phoenix_events_oban_stop",
+        [:oban, :job, :stop],
+        &PhoenixEvents.oban_stop/4,
+        {self()}
+      )
+
+      :telemetry.attach(
+        "phoenix_events_oban_exception",
+        [:oban, :job, :exception],
+        &PhoenixEvents.oban_exception/4,
         {self()}
       )
     end
@@ -149,11 +202,23 @@ defmodule PhoenixEvents do
   end
 
   def handle_query(_, measurements, meta, {phoenix_events_pid}) do
-    event_pid = PhoenixEvents.pid_to_event(phoenix_events_pid, self())
+    event_pid = pid_to_event(phoenix_events_pid, self())
 
     if event_pid != nil do
       Event.add_query(event_pid, {meta.query, div(measurements.total_time, 1_000_000)})
     end
+  end
+
+  def oban_start(_name, _m, meta, {pid}) do
+    GenServer.call(pid, {:oban_start, meta, self()})
+  end
+
+  def oban_stop(_name, _m, _, {pid}) do
+    GenServer.call(pid, {:oban_stop, self()})
+  end
+
+  def oban_exception(_name, _measure, meta, {pid}) do
+    GenServer.call(pid, {:oban_exception, meta, self()})
   end
 
   @impl true
@@ -200,6 +265,7 @@ defmodule PhoenixEvents do
       })
 
     Event.set_action(pid, meta.action)
+    Event.setup(pid, options.setup_func, [{:custom, meta}])
 
     events = events |> Map.put(meta.pid, pid)
     ref = Process.monitor(meta.pid)
@@ -225,6 +291,58 @@ defmodule PhoenixEvents do
   end
 
   @impl true
+  def handle_call({:oban_start, meta, o_pid}, _from, {events, processes, options}) do
+    {:ok, pid} =
+      Event.start_link(%{
+        persona: options.persona,
+        the_request: "OBAN #{meta.job.queue}"
+      })
+
+    Event.set_action(pid, meta.job.worker)
+    Event.setup(pid, options.setup_func, [{:oban, meta}])
+    Event.add_volatile(pid, :oban_queue, meta.job.queue)
+    Event.add_volatile(pid, :oban_args, meta.job.args)
+
+    events = events |> Map.put(o_pid, pid)
+    ref = Process.monitor(o_pid)
+    processes = processes |> Map.put(o_pid, ref)
+
+    {:reply, :ok, {events, processes, options}}
+  end
+
+  @impl true
+  def handle_call({:oban_stop, o_pid}, _from, {events, processes, options}) do
+    {event_pid, events} = events |> Map.pop(o_pid)
+    {ref, processes} = processes |> Map.pop(o_pid)
+    Process.demonitor(ref)
+    Event.finalize(event_pid)
+    Event.send(event_pid, options)
+    Event.cleanup(event_pid)
+    {:reply, :ok, {events, processes, options}}
+  end
+
+  @impl true
+  def handle_call({:oban_exception, meta, o_pid}, _from, {events, processes, options}) do
+    {event_pid, events} = events |> Map.pop(o_pid)
+    {ref, processes} = processes |> Map.pop(o_pid)
+    Process.demonitor(ref)
+
+    case meta do
+      %{kind: kind, reason: error, stacktrace: stack} ->
+        trace = Exception.format(kind, error, stack)
+        PhoenixEvents.Event.add_error(event_pid, trace)
+
+      _ ->
+        :ok
+    end
+
+    Event.finalize(event_pid)
+    Event.send(event_pid, options)
+    Event.cleanup(event_pid)
+    {:reply, :ok, {events, processes, options}}
+  end
+
+  @impl true
   def handle_call(
         {:ws_event, [:start], _measurements, meta},
         _from,
@@ -243,6 +361,9 @@ defmodule PhoenixEvents do
 
       action = "#{inspect(meta.socket.view)}"
       Event.set_action(pid, action)
+
+      Event.setup(pid, options.setup_func, [{:ws, meta.socket}])
+
       events = events |> Map.put(meta.socket.root_pid, pid)
       ref = Process.monitor(meta.socket.root_pid)
       processes = processes |> Map.put(meta.socket.root_pid, ref)
@@ -324,13 +445,19 @@ defmodule PhoenixEvents do
     end
   end
 
+  @doc """
+  Tries to find an event associated with the given process, returns nil if none are found
+  It does walk up the process tree to see if any of the parents are associated with an event and 
+  returns that event if that is the case
+  """
+  @spec pid_to_event(pid()) :: pid() | nil
   def pid_to_event(src_pid) do
     pid_to_event(Process.whereis(@instance_name), src_pid)
   end
 
-  def pid_to_event(nil, _), do: nil
+  defp pid_to_event(nil, _), do: nil
 
-  def pid_to_event(self_pid, src_pid) do
+  defp pid_to_event(self_pid, src_pid) do
     ret = GenServer.call(self_pid, {:pid_to_event, src_pid})
 
     if ret != nil do
@@ -338,6 +465,9 @@ defmodule PhoenixEvents do
     else
       case src_pid |> Process.info(:parent) do
         nil ->
+          nil
+
+        {:parent, :undefined} ->
           nil
 
         {:parent, ^src_pid} ->
@@ -365,25 +495,35 @@ defmodule PhoenixEvents do
         the_request: the_request
       })
 
+    Event.setup(pid, options.setup_func, [{:http, conn}])
     Event.set_action(pid, "unknown")
 
     # TODO: this should probably be done smarter - perhaps via a callback or something, 
     # because honestly only the application owner can know what should really happen here
-    case conn.request_path do
-      "/assets/" <> _ ->
+    did_set_action =
+      case conn.request_path do
+        "/phoenix" <> _ ->
+          Event.set_action(pid, "phoenix-internal")
+          true
+
+        "/live/websocket" <> _ ->
+          Event.set_action(pid, "phoenix-internal")
+          true
+
+        _ ->
+          false
+      end
+
+    unless did_set_action and is_list(options.static_paths) do
+      is_static =
+        options.static_paths
+        |> Enum.any?(fn path ->
+          conn.request_path |> String.starts_with?("/#{path}")
+        end)
+
+      if is_static do
         Event.set_action(pid, "static")
-
-      "/image/" <> _ ->
-        Event.set_action(pid, "static")
-
-      "/phoenix" <> _ ->
-        Event.set_action(pid, "phoenix-internal")
-
-      "/live/websocket" <> _ ->
-        Event.set_action(pid, "phoenix-internal")
-
-      _ ->
-        :ok
+      end
     end
 
     pid
