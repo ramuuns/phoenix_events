@@ -397,11 +397,15 @@ defmodule PhoenixEvents do
     # the request crashed
     {_, processes} = processes |> Map.pop(pid)
     {event_pid, events} = events |> Map.pop(pid)
-    trace = Exception.format(:error, e, stacktrace)
-    Event.add_error(event_pid, trace)
-    Event.finalize(event_pid)
-    Event.send(event_pid, options)
-    Event.cleanup(event_pid)
+
+    if event_pid != nil do
+      trace = Exception.format(:error, e, stacktrace)
+      Event.add_error(event_pid, trace)
+      Event.finalize(event_pid)
+      Event.send(event_pid, options)
+      Event.cleanup(event_pid)
+    end
+
     {:noreply, {events, processes, options}}
   end
 
@@ -411,9 +415,12 @@ defmodule PhoenixEvents do
     {_, processes} = processes |> Map.pop(pid)
     {event_pid, events} = events |> Map.pop(pid)
 
-    Event.finalize(event_pid)
-    Event.send(event_pid, options)
-    Event.cleanup(event_pid)
+    if event_pid != nil do
+      Event.finalize(event_pid)
+      Event.send(event_pid, options)
+      Event.cleanup(event_pid)
+    end
+
     {:noreply, {events, processes, options}}
   end
 
