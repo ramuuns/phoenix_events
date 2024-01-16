@@ -5,13 +5,15 @@ defmodule PhoenixEvents.Event do
   @impl true
   def init(%{
         persona: persona,
-        the_request: the_request
+        the_request: the_request,
+        memory: bytes_start
       }) do
     {:ok,
      %{
        start: :os.system_time(:millisecond),
        finalized: false,
        sent: false,
+       memory: bytes_start,
        event: %{
          epoch: :os.system_time(:seconds),
          id: make_id(),
@@ -38,6 +40,10 @@ defmodule PhoenixEvents.Event do
 
   def finalize(pid) do
     GenServer.call(pid, :finalize)
+  end
+
+  def finalize(pid, data) do
+    GenServer.call(pid, {:finalize, data})
   end
 
   def send(pid, options) do
@@ -146,6 +152,22 @@ defmodule PhoenixEvents.Event do
   def handle_cast({:add_volatile, {key, value}}, %{event: %{volatile: volatile} = ev} = event) do
     volatile = volatile |> Map.put(key, value)
     {:noreply, %{event | event: %{ev | volatile: volatile}}}
+  end
+
+  @impl true
+  def handle_call({:finalize, _}, _from, %{finalized: true} = event), do: {:reply, :ok, event}
+
+  def handle_call(
+        {:finalize, %{memory: bytes_end}},
+        from,
+        %{memory: bytes_start, event: %{tuning: tuning} = ev} = event
+      ) do
+    tuning = tuning |> Map.put(:process_memory_bytes_added, bytes_end - bytes_start)
+    handle_call(:finalize, from, %{event | event: %{ev | tuning: tuning}})
+  end
+
+  def handle_call({:finalize, _}, from, event) do
+    handle_call(:finalize, from, event)
   end
 
   @impl true

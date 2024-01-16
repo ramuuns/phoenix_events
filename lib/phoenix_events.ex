@@ -245,7 +245,8 @@ defmodule PhoenixEvents do
     {event_pid, events} = events |> Map.pop(meta.conn.owner)
     {ref, processes} = processes |> Map.pop(meta.conn.owner)
     Process.demonitor(ref)
-    Event.finalize(event_pid)
+    {:memory, bytes_end} = Process.info(meta.conn.owner, :memory)
+    Event.finalize(event_pid, %{memory: bytes_end})
     Event.send(event_pid, options)
     Event.cleanup(event_pid)
 
@@ -258,10 +259,13 @@ defmodule PhoenixEvents do
         _from,
         {events, processes, options}
       ) do
+    {:memory, bytes_start} = Process.info(meta.pid, :memory)
+
     {:ok, pid} =
       Event.start_link(%{
         persona: options.persona,
-        the_request: meta.the_request
+        the_request: meta.the_request,
+        memory: bytes_start
       })
 
     Event.set_action(pid, meta.action)
@@ -283,7 +287,8 @@ defmodule PhoenixEvents do
     {event_pid, events} = events |> Map.pop(meta.pid)
     {ref, processes} = processes |> Map.pop(meta.pid)
     Process.demonitor(ref)
-    Event.finalize(event_pid)
+    {:memory, bytes_end} = Process.info(meta.pid, :memory)
+    Event.finalize(event_pid, %{memory: bytes_end})
     Event.send(event_pid, options)
     Event.cleanup(event_pid)
 
@@ -292,16 +297,23 @@ defmodule PhoenixEvents do
 
   @impl true
   def handle_call({:oban_start, meta, o_pid}, _from, {events, processes, options}) do
+    {:memory, bytes_start} = Process.info(o_pid, :memory)
+
     {:ok, pid} =
       Event.start_link(%{
         persona: options.persona,
-        the_request: "OBAN #{meta.job.queue}"
+        the_request: "OBAN #{meta.job.queue}",
+        memory: bytes_start
       })
 
     Event.set_action(pid, meta.job.worker)
     Event.setup(pid, options.setup_func, [{:oban, meta}])
-    Event.add_volatile(pid, :oban_queue, meta.job.queue)
-    Event.add_volatile(pid, :oban_args, meta.job.args)
+
+    Event.add_volatile(pid, :oban, %{
+      queue: meta.job.queue,
+      args: meta.job.args,
+      attempt: meta.job.attempt
+    })
 
     events = events |> Map.put(o_pid, pid)
     ref = Process.monitor(o_pid)
@@ -315,7 +327,8 @@ defmodule PhoenixEvents do
     {event_pid, events} = events |> Map.pop(o_pid)
     {ref, processes} = processes |> Map.pop(o_pid)
     Process.demonitor(ref)
-    Event.finalize(event_pid)
+    {:memory, bytes_end} = Process.info(o_pid, :memory)
+    Event.finalize(event_pid, %{memory: bytes_end})
     Event.send(event_pid, options)
     Event.cleanup(event_pid)
     {:reply, :ok, {events, processes, options}}
@@ -336,7 +349,8 @@ defmodule PhoenixEvents do
         :ok
     end
 
-    Event.finalize(event_pid)
+    {:memory, bytes_end} = Process.info(o_pid, :memory)
+    Event.finalize(event_pid, %{memory: bytes_end})
     Event.send(event_pid, options)
     Event.cleanup(event_pid)
     {:reply, :ok, {events, processes, options}}
@@ -351,12 +365,14 @@ defmodule PhoenixEvents do
     if events |> Map.has_key?(meta.socket.root_pid) do
       {:reply, :ok, {events, processes, options}}
     else
+      {:memory, bytes_start} = Process.info(meta.socket.root_pid, :memory)
       the_request = get_the_request(meta)
 
       {:ok, pid} =
         Event.start_link(%{
           persona: options.persona,
-          the_request: the_request
+          the_request: the_request,
+          memory: bytes_start
         })
 
       action = "#{inspect(meta.socket.view)}"
@@ -380,7 +396,8 @@ defmodule PhoenixEvents do
     {event_pid, events} = events |> Map.pop(meta.socket.root_pid)
     {ref, processes} = processes |> Map.pop(meta.socket.root_pid)
     Process.demonitor(ref)
-    Event.finalize(event_pid)
+    {:memory, bytes_end} = Process.info(meta.socket.root_pid, :memory)
+    Event.finalize(event_pid, %{memory: bytes_end})
     Event.send(event_pid, options)
     Event.cleanup(event_pid)
 
@@ -401,7 +418,15 @@ defmodule PhoenixEvents do
     if event_pid != nil do
       trace = Exception.format(:error, e, stacktrace)
       Event.add_error(event_pid, trace)
-      Event.finalize(event_pid)
+
+      case Process.info(pid, :memory) do
+        {:memory, bytes_end} ->
+          Event.finalize(event_pid, %{memory: bytes_end})
+
+        _ ->
+          Event.finalize(event_pid)
+      end
+
       Event.send(event_pid, options)
       Event.cleanup(event_pid)
     end
@@ -416,7 +441,14 @@ defmodule PhoenixEvents do
     {event_pid, events} = events |> Map.pop(pid)
 
     if event_pid != nil do
-      Event.finalize(event_pid)
+      case Process.info(pid, :memory) do
+        {:memory, bytes_end} ->
+          Event.finalize(event_pid, %{memory: bytes_end})
+
+        _ ->
+          Event.finalize(event_pid)
+      end
+
       Event.send(event_pid, options)
       Event.cleanup(event_pid)
     end
@@ -470,20 +502,51 @@ defmodule PhoenixEvents do
     if ret != nil do
       ret
     else
-      case src_pid |> Process.info(:parent) do
+      case try_get_parent(src_pid) do
+        nil ->
+          nil
+
+        parent_pid ->
+          pid_to_event(self_pid, parent_pid)
+      end
+    end
+  end
+
+  if System.otp_release() |> String.to_integer() >= 25 do
+    # OTP/25 supports a nice thing where we can just get the parent via process info
+    defp try_get_parent(pid) do
+      case Process.info(pid, :parent) do
         nil ->
           nil
 
         {:parent, :undefined} ->
           nil
 
-        {:parent, ^src_pid} ->
+        {:parent, ^pid} ->
           nil
 
         {:parent, parent_pid} ->
-          pid_to_event(self_pid, parent_pid)
+          parent_pid
       end
     end
+  else
+    #  we have to try to do this the hacky ugly dumb way
+    defp try_get_parent(pid) do
+      case Process.info(pid, :dictionary) do
+        nil ->
+          nil
+
+        {:dictionary, dictionary} ->
+          case Keyword.get(dictionary, :"$ancestors") do
+            [parent | _] -> parent |> ensure_pid()
+            _ -> nil
+          end
+      end
+    end
+
+    defp ensure_pid(maybe_pid) when is_pid(maybe_pid), do: maybe_pid
+
+    defp ensure_pid(_), do: nil
   end
 
   defp make_http_event(conn, options) do
