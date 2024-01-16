@@ -550,6 +550,7 @@ defmodule PhoenixEvents do
   end
 
   defp make_http_event(conn, options) do
+    {:memory, bytes_start} = Process.info(conn.owner, :memory)
     the_request = "#{conn.method} #{conn.request_path}"
 
     the_request =
@@ -562,7 +563,8 @@ defmodule PhoenixEvents do
     {:ok, pid} =
       Event.start_link(%{
         persona: options.persona,
-        the_request: the_request
+        the_request: the_request,
+        memory: bytes_start
       })
 
     Event.setup(pid, options.setup_func, [{:http, conn}])
