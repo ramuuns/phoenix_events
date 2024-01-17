@@ -245,6 +245,15 @@ defmodule PhoenixEvents do
     {event_pid, events} = events |> Map.pop(meta.conn.owner)
     {ref, processes} = processes |> Map.pop(meta.conn.owner)
     Process.demonitor(ref)
+
+    case meta.conn do
+      %{status: status} ->
+        Event.add_tuning_status(event_pid, status)
+
+      _ ->
+        :ok
+    end
+
     finalize_with_memory(event_pid, meta.conn.owner)
     Event.send(event_pid, options)
     Event.cleanup(event_pid)

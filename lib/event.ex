@@ -82,6 +82,12 @@ defmodule PhoenixEvents.Event do
     GenServer.cast(pid, {:add_volatile, {key, value}})
   end
 
+  def add_tuning_status(_, nil), do: :ok
+
+  def add_tuning_status(pid, status) do
+    GenServer.cast(pid, {:add_tuning_status, status})
+  end
+
   def start_link(data) do
     GenServer.start_link(__MODULE__, data, [])
   end
@@ -128,6 +134,12 @@ defmodule PhoenixEvents.Event do
              }
          }
      }}
+  end
+
+  @impl true
+  def handle_cast({:add_tuning_status, status}, %{event: %{tuning: tuning} = ev} = event) do
+    tuning = tuning |> Map.put(:status, status)
+    {:noreply, %{event | event: %{ev | tuning: tuning}}}
   end
 
   @impl true
