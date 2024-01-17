@@ -245,8 +245,7 @@ defmodule PhoenixEvents do
     {event_pid, events} = events |> Map.pop(meta.conn.owner)
     {ref, processes} = processes |> Map.pop(meta.conn.owner)
     Process.demonitor(ref)
-    {:memory, bytes_end} = Process.info(meta.conn.owner, :memory)
-    Event.finalize(event_pid, %{memory: bytes_end})
+    finalize_with_memory(event_pid, meta.conn.owner)
     Event.send(event_pid, options)
     Event.cleanup(event_pid)
 
@@ -287,8 +286,7 @@ defmodule PhoenixEvents do
     {event_pid, events} = events |> Map.pop(meta.pid)
     {ref, processes} = processes |> Map.pop(meta.pid)
     Process.demonitor(ref)
-    {:memory, bytes_end} = Process.info(meta.pid, :memory)
-    Event.finalize(event_pid, %{memory: bytes_end})
+    finalize_with_memory(event_pid, meta.pid)
     Event.send(event_pid, options)
     Event.cleanup(event_pid)
 
@@ -327,8 +325,7 @@ defmodule PhoenixEvents do
     {event_pid, events} = events |> Map.pop(o_pid)
     {ref, processes} = processes |> Map.pop(o_pid)
     Process.demonitor(ref)
-    {:memory, bytes_end} = Process.info(o_pid, :memory)
-    Event.finalize(event_pid, %{memory: bytes_end})
+    finalize_with_memory(event_pid, o_pid)
     Event.send(event_pid, options)
     Event.cleanup(event_pid)
     {:reply, :ok, {events, processes, options}}
@@ -349,8 +346,7 @@ defmodule PhoenixEvents do
         :ok
     end
 
-    {:memory, bytes_end} = Process.info(o_pid, :memory)
-    Event.finalize(event_pid, %{memory: bytes_end})
+    finalize_with_memory(event_pid, o_pid)
     Event.send(event_pid, options)
     Event.cleanup(event_pid)
     {:reply, :ok, {events, processes, options}}
@@ -396,8 +392,7 @@ defmodule PhoenixEvents do
     {event_pid, events} = events |> Map.pop(meta.socket.root_pid)
     {ref, processes} = processes |> Map.pop(meta.socket.root_pid)
     Process.demonitor(ref)
-    {:memory, bytes_end} = Process.info(meta.socket.root_pid, :memory)
-    Event.finalize(event_pid, %{memory: bytes_end})
+    finalize_with_memory(event_pid, meta.socket.root_pid)
     Event.send(event_pid, options)
     Event.cleanup(event_pid)
 
@@ -419,13 +414,7 @@ defmodule PhoenixEvents do
       trace = Exception.format(:error, e, stacktrace)
       Event.add_error(event_pid, trace)
 
-      case Process.info(pid, :memory) do
-        {:memory, bytes_end} ->
-          Event.finalize(event_pid, %{memory: bytes_end})
-
-        _ ->
-          Event.finalize(event_pid)
-      end
+      finalize_with_memory(event_pid, pid)
 
       Event.send(event_pid, options)
       Event.cleanup(event_pid)
@@ -441,13 +430,7 @@ defmodule PhoenixEvents do
     {event_pid, events} = events |> Map.pop(pid)
 
     if event_pid != nil do
-      case Process.info(pid, :memory) do
-        {:memory, bytes_end} ->
-          Event.finalize(event_pid, %{memory: bytes_end})
-
-        _ ->
-          Event.finalize(event_pid)
-      end
+      finalize_with_memory(event_pid, pid)
 
       Event.send(event_pid, options)
       Event.cleanup(event_pid)
@@ -547,6 +530,16 @@ defmodule PhoenixEvents do
     defp ensure_pid(maybe_pid) when is_pid(maybe_pid), do: maybe_pid
 
     defp ensure_pid(_), do: nil
+  end
+
+  defp finalize_with_memory(event_pid, process_pid) do
+    case Process.info(process_pid, :memory) do
+      {:memory, bytes_end} ->
+        Event.finalize(event_pid, %{memory: bytes_end})
+
+      _ ->
+        Event.finalize(event_pid)
+    end
   end
 
   defp make_http_event(conn, options) do
