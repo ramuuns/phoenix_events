@@ -287,7 +287,7 @@ defmodule PhoenixEvents do
         _from,
         {events, processes, options}
       ) do
-    {:memory, bytes_start} = Process.info(meta.pid, :memory)
+    bytes_start = maybe_get_memory(meta.pid)
 
     {:ok, pid} =
       Event.start_link(%{
@@ -324,7 +324,7 @@ defmodule PhoenixEvents do
 
   @impl true
   def handle_call({:oban_start, meta, o_pid}, _from, {events, processes, options}) do
-    {:memory, bytes_start} = Process.info(o_pid, :memory)
+    bytes_start = maybe_get_memory(o_pid)
 
     {:ok, pid} =
       Event.start_link(%{
@@ -390,7 +390,7 @@ defmodule PhoenixEvents do
     if events |> Map.has_key?(meta.socket.root_pid) do
       {:reply, :ok, {events, processes, options}}
     else
-      {:memory, bytes_start} = Process.info(meta.socket.root_pid, :memory)
+      bytes_start = maybe_get_memory(meta.socket.root_pid)
       the_request = get_the_request(meta)
 
       {:ok, pid} =
@@ -583,8 +583,15 @@ defmodule PhoenixEvents do
     end
   end
 
+  defp maybe_get_memory(pid) do
+    case Process.info(pid, :memory) do
+      {:memory, bytes} -> bytes
+      _ -> 0
+    end
+  end
+
   defp make_http_event(conn, options) do
-    {:memory, bytes_start} = Process.info(conn.owner, :memory)
+    bytes_start = maybe_get_memory(conn.owner)
     the_request = "#{conn.method} #{conn.request_path}"
 
     the_request =
