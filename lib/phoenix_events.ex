@@ -24,6 +24,7 @@ defmodule PhoenixEvents do
   """
 
   use GenServer
+  require Logger
 
   alias PhoenixEvents.Event
 
@@ -113,12 +114,31 @@ defmodule PhoenixEvents do
         raise "PhoenixEvents: :queries_prefix option must be a list, e.g. [:myapp, :repo]"
       end
 
-      :telemetry.attach(
-        "phoenix_events_queries",
-        options.queries_prefix ++ [:query],
-        &PhoenixEvents.handle_query/4,
-        {self()}
-      )
+      case options.queries_prefix do
+        [_, :repo] ->
+          :telemetry.attach(
+            "phoenix_events_queries",
+            options.queries_prefix ++ [:query],
+            &PhoenixEvents.handle_query/4,
+            {self()}
+          )
+
+        [[_, :repo] | _] = prefixes ->
+          prefixes
+          |> Enum.each(fn prefix ->
+            name = "phoenix_events_queries_#{Enum.map(prefix, &to_string/1) |> Enum.join("_")}"
+
+            :telemetry.attach(
+              name,
+              prefix ++ [:query],
+              &PhoenixEvents.handle_query/4,
+              {self()}
+            )
+          end)
+
+        _ ->
+          raise "PhoenixEvents: :queries_prefix option seems invalid - expecting either [:myapp, :repo] or [[:app1, :repo], [:app2, :repo]]"
+      end
     end
 
     if options.log_oban do
@@ -414,6 +434,22 @@ defmodule PhoenixEvents do
   end
 
   @impl true
+  def handle_info({:DOWN, _ref, :process, pid, {:shutdown, _}}, {events, processes, options}) do
+    # the request finished, but weirdly
+    {_, processes} = processes |> Map.pop(pid)
+    {event_pid, events} = events |> Map.pop(pid)
+
+    if event_pid != nil do
+      finalize_with_memory(event_pid, pid)
+
+      Event.send(event_pid, options)
+      Event.cleanup(event_pid)
+    end
+
+    {:noreply, {events, processes, options}}
+  end
+
+  @impl true
   def handle_info({:DOWN, _ref, :process, pid, {e, stacktrace}}, {events, processes, options}) do
     # the request crashed
     {_, processes} = processes |> Map.pop(pid)
@@ -458,6 +494,7 @@ defmodule PhoenixEvents do
       Phoenix.Router.routes(router)
       |> Enum.find(fn
         %{plug_opts: ^view} -> true
+        %{metadata: %{phoenix_live_view: {^view, _, _, _}}} -> true
         _ -> false
       end)
 
@@ -466,13 +503,8 @@ defmodule PhoenixEvents do
         "WS_POST #{path} #{event}"
 
       _other ->
-        case view do
-          Phoenix.LiveDashboard.PageLive ->
-            "WS_POST /dashboard/ #{event}"
-
-          _ ->
-            raise "cannot find path in route, meta: #{meta |> inspect()}"
-        end
+        Logger.info("Could not figure out the path for live view #{view |> inspect()}")
+        "WS_POST /__unknown #{event}"
     end
   end
 
