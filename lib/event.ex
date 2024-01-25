@@ -219,8 +219,7 @@ defmodule PhoenixEvents.Event do
     end
 
     if options.send_events do
-      event_json = Jason.encode!(event.event)
-      send_event(event_json, options)
+      send_event(event.event, options)
     end
 
     {:reply, :ok, %{event | sent: true}}
@@ -231,12 +230,7 @@ defmodule PhoenixEvents.Event do
     host = options.collector_host
 
     Task.async(fn ->
-      :httpc.request(
-        :post,
-        {~c"http://#{host}:#{port}/event", [], ~c"application/json", json |> to_charlist()},
-        [],
-        []
-      )
+      Req.post("http://#{host}:#{port}/event", json: json)
     end)
   end
 

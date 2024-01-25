@@ -4,7 +4,7 @@ defmodule PhoenixEvents.MixProject do
   def project do
     [
       app: :phoenix_events,
-      version: "0.4.2",
+      version: "0.5.0",
       elixir: "~> 1.14",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
@@ -18,7 +18,7 @@ defmodule PhoenixEvents.MixProject do
   # Run "mix help compile.app" to learn about applications.
   def application do
     [
-      extra_applications: [:logger, :inets]
+      extra_applications: [:logger]
     ]
   end
 
@@ -29,6 +29,7 @@ defmodule PhoenixEvents.MixProject do
       {:phoenix, ">= 0.0.0"},
       {:jason, ">= 0.0.0"},
       {:telemetry, ">= 0.0.0"},
+      {:req, "~> 0.4.0"},
       {:ex_doc, ">= 0.0.0", only: :dev, runtime: false}
     ]
   end
