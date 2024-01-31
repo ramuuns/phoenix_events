@@ -50,6 +50,16 @@ defmodule PhoenixEvents.Event do
     GenServer.call(pid, {:send, options})
   end
 
+  def maybe_get_current_event_id() do
+    case PhoenixEvents.pid_to_event(self()) do
+      nil ->
+        nil
+
+      pid ->
+        GenServer.call(pid, :get_event_id)
+    end
+  end
+
   def set_action(pid, action) do
     GenServer.cast(
       pid,
@@ -213,6 +223,7 @@ defmodule PhoenixEvents.Event do
     handle_call({:send, options}, from, event)
   end
 
+  @impl true
   def handle_call({:send, options}, _from, event) do
     if options.log_events do
       Logger.info(event.event |> inspect(pretty: true))
@@ -223,6 +234,11 @@ defmodule PhoenixEvents.Event do
     end
 
     {:reply, :ok, %{event | sent: true}}
+  end
+
+  @impl true
+  def handle_call(:get_event_id, _from, %{event: %{id: id}} = event) do
+    {:reply, id, event}
   end
 
   defp send_event(json, options) do
