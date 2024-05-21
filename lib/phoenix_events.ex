@@ -456,8 +456,14 @@ defmodule PhoenixEvents do
     {event_pid, events} = events |> Map.pop(pid)
 
     if event_pid != nil do
-      trace = Exception.format(:error, e, stacktrace)
-      Event.add_error(event_pid, trace)
+      try do
+        trace = Exception.format(:error, e, stacktrace)
+        Event.add_error(event_pid, trace)
+      rescue
+        IO.inspect({e, stacktrace}, label: "Possibly not a stacktrace")
+        Event.add_error(event_pid, "possibly not a stacktrace when trying to add a trace, see logs")
+        _ -> :ok
+      end
 
       finalize_with_memory(event_pid, pid)
 
