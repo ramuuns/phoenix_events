@@ -460,9 +460,10 @@ defmodule PhoenixEvents do
         trace = Exception.format(:error, e, stacktrace)
         Event.add_error(event_pid, trace)
       rescue
-        IO.inspect({e, stacktrace}, label: "Possibly not a stacktrace")
-        Event.add_error(event_pid, "possibly not a stacktrace when trying to add a trace, see logs")
-        _ -> :ok
+        _ -> 
+          IO.inspect({e, stacktrace}, label: "Possibly not a stacktrace")
+          Event.add_error(event_pid, "possibly not a stacktrace when trying to add a trace, see logs")
+          :ok
       end
 
       finalize_with_memory(event_pid, pid)
